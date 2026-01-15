@@ -1,0 +1,70 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>02.PU_ Teaching Plan</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @font-face {
+            font-family: 'Microsoft YaHei';
+            src: local('Microsoft YaHei'), local('微软雅黑');
+        }
+
+        /* 舒窈衡水体 fallback 逻辑 */
+        @font-face {
+            font-family: 'ShuYaoHengShui';
+            src: local('舒窈衡水体'), local('Hengshui');
+        }
+
+        body {
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 0;
+            -webkit-print-color-adjust: exact;
+        }
+
+        .font-zh { font-family: 'Microsoft YaHei', sans-serif; }
+        
+        .font-content { 
+            /* 依靠字体堆栈：
+               1. 舒窈衡水体：自带倾斜感的手写风格。
+               2. Calibri：英文标准字体。
+               3. 微软雅黑：中文字符回退。
+            */
+            font-family: 'ShuYaoHengShui', 'Calibri', 'Microsoft YaHei', sans-serif; 
+            /* 开启斜体属性：Calibri 等具有原生斜体定义的字体将变斜 */
+            font-style: italic; 
+            /* 核心设置：禁止浏览器对没有原生斜体定义的字体（如微软雅黑、衡水体）进行人工合成斜体。
+               这样中文字符会回退并以正体形式显示。 */
+            font-synthesis: none; 
+        }
+
+        @media print {
+            body { background: none; }
+            .no-print { display: none !important; }
+            .paper { box-shadow: none !important; margin: 0 !important; border-radius: 0 !important; width: 100% !important; }
+        }
+
+        /* 优化输入框焦点视觉 */
+        textarea:focus {
+            background-color: rgba(99, 102, 241, 0.02);
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
+    "mammoth": "https://esm.sh/mammoth@1.6.0"
+  }
+}
+</script>
+</head>
+<body class="font-zh">
+    <div id="root"></div>
+</body>
+</html>
