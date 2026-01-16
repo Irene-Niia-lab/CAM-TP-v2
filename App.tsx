@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, memo, useCallback } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { TeachingPlan } from './types';
 import * as mammoth from 'mammoth';
 
@@ -30,6 +30,79 @@ const INITIAL_STATE: TeachingPlan = {
     parent: { content: '', time: '', plan: '' },
     partner: { content: '', time: '', plan: '' },
   },
+};
+
+// --- Schema 定义 (用于强制 AI 输出正确格式) ---
+const TEACHING_PLAN_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    basic: {
+      type: Type.OBJECT,
+      properties: {
+        level: { type: Type.STRING },
+        unit: { type: Type.STRING },
+        lessonNo: { type: Type.STRING },
+        duration: { type: Type.STRING },
+        className: { type: Type.STRING },
+        studentCount: { type: Type.STRING },
+        date: { type: Type.STRING },
+      }
+    },
+    objectives: {
+      type: Type.OBJECT,
+      properties: {
+        vocab: {
+          type: Type.OBJECT,
+          properties: { core: { type: Type.STRING }, basic: { type: Type.STRING }, satellite: { type: Type.STRING } }
+        },
+        patterns: {
+          type: Type.OBJECT,
+          properties: { core: { type: Type.STRING }, basic: { type: Type.STRING }, satellite: { type: Type.STRING } }
+        },
+        expansion: {
+          type: Type.OBJECT,
+          properties: { culture: { type: Type.STRING }, daily: { type: Type.STRING }, habits: { type: Type.STRING } }
+        }
+      }
+    },
+    materials: {
+      type: Type.OBJECT,
+      properties: { cards: { type: Type.STRING }, realia: { type: Type.STRING }, multimedia: { type: Type.STRING }, rewards: { type: Type.STRING } }
+    },
+    games: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: { name: { type: Type.STRING }, goal: { type: Type.STRING }, prep: { type: Type.STRING }, rules: { type: Type.STRING } }
+      }
+    },
+    steps: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          step: { type: Type.STRING },
+          duration: { type: Type.STRING },
+          design: { type: Type.STRING },
+          instructions: { type: Type.STRING },
+          notes: { type: Type.STRING },
+          blackboard: { type: Type.STRING }
+        }
+      }
+    },
+    connection: {
+      type: Type.OBJECT,
+      properties: { review: { type: Type.STRING }, preview: { type: Type.STRING }, homework: { type: Type.STRING } }
+    },
+    feedback: {
+      type: Type.OBJECT,
+      properties: {
+        student: { type: Type.OBJECT, properties: { content: { type: Type.STRING }, time: { type: Type.STRING }, plan: { type: Type.STRING } } },
+        parent: { type: Type.OBJECT, properties: { content: { type: Type.STRING }, time: { type: Type.STRING }, plan: { type: Type.STRING } } },
+        partner: { type: Type.OBJECT, properties: { content: { type: Type.STRING }, time: { type: Type.STRING }, plan: { type: Type.STRING } } },
+      }
+    }
+  }
 };
 
 // --- 子组件定义 ---
@@ -181,6 +254,7 @@ const App: React.FC = () => {
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
   const [isPreview, setIsPreview] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingMsg, setProcessingMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -224,34 +298,66 @@ const App: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
     setIsProcessing(true);
+    setProcessingMsg('正在准备文件...');
+    
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      let content = "";
+      let promptPart: any;
+      
       if (file.name.toLowerCase().endsWith('.docx')) {
+        setProcessingMsg('正在提取文档文字...');
         const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-        content = result.value;
+        promptPart = { text: `请基于以下文字内容提取完整教案：\n${result.value}` };
       } else {
+        setProcessingMsg('正在解析图像数据...');
         const reader = new FileReader();
         const base64 = await new Promise<string>((res) => {
           reader.onload = () => res((reader.result as string).split(',')[1]);
           reader.readAsDataURL(file);
         });
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: { parts: [{ text: "提取教案并严格按 JSON 格式返回。" }, { inlineData: { mimeType: file.type, data: base64 } }] }
-        });
-        content = response.text || "";
+        promptPart = { 
+          inlineData: { mimeType: file.type, data: base64 },
+        };
       }
-      const aiResponse = await ai.models.generateContent({
+
+      setProcessingMsg('正在智能匹配教案模板字段...');
+      const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `基于此内容提取完整教案 JSON: ${content}`,
-        config: { responseMimeType: "application/json" }
+        contents: { 
+          parts: [
+            { text: "你是一位资深的少儿英语教研专家。请严格识别并提取所提供内容中的教案信息。必须包含核心目标、卫星句型、互动游戏（名称/目的/准备/规则）以及教学实施的各个环节。请按指定的 JSON 结构返回，不要输出任何解释性文字。" },
+            promptPart 
+          ] 
+        },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: TEACHING_PLAN_SCHEMA,
+          temperature: 0.1, // 降低随机性，提高提取准确率
+        }
       });
-      const extracted = JSON.parse(aiResponse.text || "{}");
-      setData(prev => ({ ...prev, ...extracted }));
-    } catch (e) { alert("智能提取失败，请重试。"); }
-    finally { setIsProcessing(false); }
+
+      const text = response.text || "{}";
+      const extracted = JSON.parse(text);
+      
+      // 合并数据，保留现有结构
+      setData(prev => ({ 
+        ...prev, 
+        ...extracted,
+        // 确保数组不为空
+        games: extracted.games?.length ? extracted.games : prev.games,
+        steps: extracted.steps?.length ? extracted.steps : prev.steps
+      }));
+      setProcessingMsg('导入成功！');
+      setTimeout(() => setProcessingMsg(''), 1500);
+    } catch (e) { 
+      console.error(e);
+      alert("智能提取失败。原因可能是文件内容过于模糊或 API 连接异常，请稍后重试。"); 
+    } finally { 
+      setIsProcessing(false); 
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const addGame = () => updateByPath('games', [...data.games, { name: '', goal: '', prep: '', rules: '' }]);
@@ -264,8 +370,17 @@ const App: React.FC = () => {
   return (
     <div className={`min-h-screen transition-all py-12 px-4 print:p-0 print:bg-white ${isPreview ? 'bg-slate-800' : 'bg-slate-50'}`}>
       
+      {/* 智能处理状态遮罩 */}
+      {isProcessing && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center flex-col text-white">
+          <div className="w-16 h-16 border-4 border-indigo-400 border-t-transparent rounded-full animate-spin mb-6"></div>
+          <p className="text-xl font-bold font-zh tracking-widest animate-pulse">{processingMsg}</p>
+          <p className="text-slate-400 text-sm mt-2">AI 正在努力工作中，请稍候...</p>
+        </div>
+      )}
+
       {/* 侧边控制栏 */}
-      <div className={`no-print fixed top-8 right-8 flex flex-col gap-3 z-50 ${isPreview ? 'opacity-0' : 'opacity-100'}`}>
+      <div className={`no-print fixed top-8 right-8 flex flex-col gap-3 z-50 ${isPreview ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
         <div className="bg-white/95 p-4 rounded-2xl border shadow-xl">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{currentUser}</span>
@@ -273,12 +388,12 @@ const App: React.FC = () => {
           </div>
           <button onClick={() => setCurrentUser(null)} className="text-red-400 text-[10px] font-bold uppercase underline">切换账号</button>
         </div>
-        <button onClick={() => window.print()} className="bg-slate-900 text-white px-6 py-3 rounded-xl shadow-xl font-bold text-sm">导出 PDF</button>
-        <button disabled={isProcessing} onClick={() => fileInputRef.current?.click()} className="bg-indigo-500 text-white px-6 py-3 rounded-xl shadow-xl font-bold text-sm">
-          {isProcessing ? '处理中...' : '智能导入同步'}
-          <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
+        <button onClick={() => window.print()} className="bg-slate-900 text-white px-6 py-3 rounded-xl shadow-xl font-bold text-sm hover:scale-105 active:scale-95 transition-all">导出 PDF</button>
+        <button disabled={isProcessing} onClick={() => fileInputRef.current?.click()} className="bg-indigo-500 text-white px-6 py-3 rounded-xl shadow-xl font-bold text-sm hover:scale-105 active:scale-95 transition-all disabled:opacity-50">
+          智能导入同步
+          <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".docx,image/*,application/pdf" />
         </button>
-        <button onClick={() => setIsPreview(!isPreview)} className="bg-white border text-slate-700 px-6 py-3 rounded-xl font-bold text-sm">{isPreview ? '退出预览' : '预览模式'}</button>
+        <button onClick={() => setIsPreview(!isPreview)} className="bg-white border text-slate-700 px-6 py-3 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all">{isPreview ? '退出预览' : '预览模式'}</button>
       </div>
 
       <div className={`paper mx-auto bg-white transition-all relative ${isPreview ? 'p-[15mm] shadow-2xl' : 'p-[20mm] rounded-3xl shadow-lg'} print:p-[10mm] print:shadow-none print:rounded-none`} style={{ maxWidth: '210mm' }}>
@@ -354,7 +469,7 @@ const App: React.FC = () => {
               <div className="space-y-5 print:space-y-2">
                 {data.games.map((game, i) => (
                   <div key={i} className="p-4 bg-slate-50/50 border rounded-xl relative print:p-0 print:border-none print:bg-transparent">
-                    {!isPreview && <button onClick={() => removeGame(i)} className="absolute top-2 right-2 text-red-300 text-[8px] uppercase">Remove</button>}
+                    {!isPreview && <button onClick={() => removeGame(i)} className="absolute top-2 right-2 text-red-300 text-[8px] uppercase hover:text-red-500">Remove</button>}
                     <div className="text-[9px] font-bold text-indigo-300 uppercase mb-2">Game {i+1}</div>
                     <EditableLine label="游戏名称" value={game.name} onChange={v => { const g = [...data.games]; g[i].name = v; updateByPath('games', g); }} isPreview={isPreview} />
                     <EditableLine label="游戏目的" value={game.goal} onChange={v => { const g = [...data.games]; g[i].goal = v; updateByPath('games', g); }} isPreview={isPreview} />
@@ -362,7 +477,7 @@ const App: React.FC = () => {
                     <EditableLine label="游戏规则" value={game.rules} onChange={v => { const g = [...data.games]; g[i].rules = v; updateByPath('games', g); }} isPreview={isPreview} />
                   </div>
                 ))}
-                {!isPreview && <button onClick={addGame} className="w-full py-2 border border-dashed border-indigo-100 text-indigo-300 text-[10px] font-bold rounded-xl">+ 添加互动游戏</button>}
+                {!isPreview && <button onClick={addGame} className="w-full py-2 border border-dashed border-indigo-100 text-indigo-300 text-[10px] font-bold rounded-xl hover:bg-indigo-50 transition-all">+ 添加互动游戏</button>}
               </div>
             </div>
           </div>
@@ -377,7 +492,7 @@ const App: React.FC = () => {
                 <div className="flex items-center gap-2 mb-2 print:mb-1">
                   <span className="font-bold text-slate-800 text-sm">{i+1}.</span>
                   <AutoResizingTextarea value={step.step} onChange={v => { const s = [...data.steps]; s[i].step = v; updateByPath('steps', s); }} isPreview={isPreview} className="font-content text-base font-bold text-slate-800" placeholder="环节名称" />
-                  {!isPreview && <button onClick={() => removeStep(i)} className="ml-auto text-red-300 text-[8px] uppercase">Delete</button>}
+                  {!isPreview && <button onClick={() => removeStep(i)} className="ml-auto text-red-300 text-[8px] uppercase hover:text-red-500">Delete</button>}
                 </div>
                 <div className="border border-slate-200 rounded-xl overflow-hidden print:border-slate-300 print:rounded-none">
                   <table className="w-full border-collapse">
